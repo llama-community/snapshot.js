@@ -12,7 +12,7 @@ import getProvider from '../../utils/provider';
 import { _TypedDataEncoder } from '@ethersproject/hash';
 import { formatEther } from '@ethersproject/units';
 import { Contract } from '@ethersproject/contracts';
-import { Result } from '@ethersproject/abi';
+import { Result, Interface } from '@ethersproject/abi';
 
 const EIP712_TYPES = {
   Transaction: [
@@ -522,6 +522,15 @@ export default class Plugin {
     );
     const receipt = await tx.wait();
     console.log('[DAO module] executed proposal:', receipt);
+    const events = await this.filterTransferFromLogs(receipt.logs);
+    console.log('[Events]: ', events)
+    if(events.length > 0 && moduleTx.hasOwnProperty("llama")){
+      const event = events[0]
+      const txId = `${event.hash}-${event.id}`;
+      this.llamaAnnotate(txId, moduleTx["llama"]);
+    }
+    
+    return events
   }
 
   async voteForQuestion(
@@ -562,5 +571,43 @@ export default class Plugin {
     );
     const receipt = await tx.wait();
     console.log('[DAO module] executed vote on oracle:', receipt);
+  }
+
+  async llamaAnnotate(txId: string, txDetails: any) {
+    const response = await fetch(`https://llama-api-47edf.ondigitalocean.app/api/tx-details/${txId}`, {
+      method: 'PUT', 
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({txDetails})
+    });
+    console.log(`[Llama] transaction ${txId} annotated successfully: `, txDetails);
+    const data = await response.json();
+    if(!data || data.status === "failure"){
+      throw new Error("Annotation failed!");
+    }
+  }
+
+  async filterTransferFromLogs(logs) {
+    const abi = [
+      'event Transfer(address indexed from, address indexed to, uint256 value)'
+    ];
+    const iface = new Interface(abi);
+    const events = logs
+      .map((log) => {
+        try {
+          const event = {
+            id: log.logIndex,
+            token: log.address,
+            hash: log.transactionHash,
+            args: iface.decodeEventLog('Transfer', log.data),
+          };
+          return event;
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter((event) => event);
+    return events;
   }
 }
